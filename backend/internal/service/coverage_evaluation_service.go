@@ -28,6 +28,7 @@ type coverageEvaluationService struct {
 	scenarios   repository.DeviationScenarioRepository
 	nodes       repository.ProcessNodeRepository
 	safeguards  repository.SafeguardRepository
+	conflicts   repository.IndependenceConflictRepository
 	audits      repository.AuditRepository
 	evaluator   *algorithm.Evaluator
 	now         func() time.Time
@@ -37,12 +38,13 @@ func NewCoverageEvaluationService(
 	scenarios repository.DeviationScenarioRepository,
 	nodes repository.ProcessNodeRepository,
 	safeguards repository.SafeguardRepository,
+	conflicts repository.IndependenceConflictRepository,
 	audits repository.AuditRepository,
 	evaluator *algorithm.Evaluator,
 ) CoverageEvaluationService {
 	return &coverageEvaluationService{
 		evaluations: evaluations, scenarios: scenarios, nodes: nodes,
-		safeguards: safeguards, audits: audits, evaluator: evaluator,
+		safeguards: safeguards, conflicts: conflicts, audits: audits, evaluator: evaluator,
 		now: func() time.Time { return time.Now().UTC() },
 	}
 }
@@ -147,6 +149,9 @@ func (s *coverageEvaluationService) Run(
 	if !changed {
 		return dto.CoverageEvaluationResponse{}, false, util.NewError(http.StatusConflict, util.CodeConflict, "evaluation state changed while the result was being stored")
 	}
+	if err := s.createConflictReviews(ctx, evaluation.ID, scenario.ID, result.Explanation.Deduplicated); err != nil {
+		return dto.CoverageEvaluationResponse{}, false, err
+	}
 	evaluation, err = s.evaluations.GetByID(ctx, evaluation.ID)
 	if err != nil {
 		return dto.CoverageEvaluationResponse{}, false, util.WrapError(http.StatusInternalServerError, util.CodeInternal, "unable to reload coverage evaluation", err)
@@ -214,6 +219,16 @@ func (s *coverageEvaluationService) Confirm(
 	}
 	if scenario.CreatedBy == actor.UserID {
 		return dto.CoverageEvaluationResponse{}, util.NewError(http.StatusConflict, util.CodeReviewerConflict, "evaluation confirmer must differ from scenario author")
+	}
+	pending, err := s.conflicts.CountPendingByEvaluation(ctx, id)
+	if err != nil {
+		return dto.CoverageEvaluationResponse{}, util.WrapError(http.StatusInternalServerError, util.CodeInternal, "unable to count pending independence conflicts", err)
+	}
+	if pending > 0 {
+		return dto.CoverageEvaluationResponse{}, util.NewError(
+			http.StatusConflict, util.CodeConflictPending,
+			fmt.Sprintf("%d independence conflict group(s) must be reviewed before the evaluation can be confirmed", pending),
+		)
 	}
 	now := s.now()
 	changed, err := s.evaluations.Transition(
@@ -332,6 +347,35 @@ func (s *coverageEvaluationService) Compare(
 		RiskRankChanged:    base.RiskRankAfter != other.RiskRankAfter,
 		InputChanged:       base.InputHash != other.InputHash,
 	}, nil
+}
+func (s *coverageEvaluationService) createConflictReviews(
+	ctx context.Context,
+	evaluationID uint,
+	scenarioID uint,
+	deduplicated []dto.DeduplicatedSafeguardResponse,
+) error {
+	if len(deduplicated) == 0 {
+		return nil
+	}
+	now := s.now()
+	reviews := make([]model.IndependenceConflictReview, 0, len(deduplicated))
+	for _, group := range deduplicated {
+		ignoredJSON, err := util.CanonicalJSON(group.IgnoredIDs)
+		if err != nil {
+			return util.WrapError(http.StatusInternalServerError, util.CodeInternal, "unable to serialize ignored safeguards", err)
+		}
+		reviews = append(reviews, model.IndependenceConflictReview{
+			EvaluationID: evaluationID, ScenarioID: scenarioID,
+			IndependenceKey: group.IndependenceKey, KeptSafeguardID: group.KeptID,
+			IgnoredSafeguardIDs: ignoredJSON, DedupReason: group.Reason,
+			ResolutionState: string(constants.ConflictPending),
+			CreatedAt:       now, UpdatedAt: now,
+		})
+	}
+	if err := s.conflicts.CreateBatch(ctx, reviews); err != nil {
+		return util.WrapError(http.StatusInternalServerError, util.CodeInternal, "unable to store independence conflict reviews", err)
+	}
+	return nil
 }
 func (s *coverageEvaluationService) recordStateAudit(
 	ctx context.Context,

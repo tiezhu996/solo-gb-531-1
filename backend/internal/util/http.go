@@ -23,6 +23,7 @@ const (
 	CodeIdempotency      ErrorCode = "IDEMPOTENCY_KEY_REQUIRED"
 	CodeStateTransition  ErrorCode = "INVALID_STATE_TRANSITION"
 	CodeReviewerConflict ErrorCode = "REVIEWER_AUTHOR_CONFLICT"
+	CodeConflictPending  ErrorCode = "INDEPENDENCE_CONFLICT_PENDING"
 )
 type AppError struct {
 	Status  int

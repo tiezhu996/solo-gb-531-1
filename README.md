@@ -35,6 +35,7 @@ docker compose up -d --build
 - 偏差分析：使用 `no/more/less/reverse/other` 引导词记录参数、原因、后果和 5×5 风险矩阵，按受约束状态机完成多人复核。
 - 保护层台账：记录保护类型、目标场景、独立性键、有效性、测试间隔、最近验证时间与证据说明；过期或重复保护层不会被错误重复计分。
 - 覆盖推演：冻结输入，构建原因到后果路径，找出未保护路径，按独立性键去重并保存评分步骤、输入哈希与算法版本。
+- 独立性冲突复核：同键去重自动生成冲突组，列出保留与忽略依据；复核员逐组接受去重、拆分保护层或补充证据并填写理由，全部处理前评估不能确认；作废或重算后处理结果仍保留并作为历史结论展示。
 - 审计中心：按实体、操作者、request ID 和时间筛选写操作；展示变更前后快照及算法运行摘要。
 - 横切能力：JWT、RBAC、登录与算法限流、request ID、统一业务错误、panic recovery、事务状态迁移、幂等评估与结构化日志。
 
@@ -72,7 +73,7 @@ queued -> running -> completed -> confirmed
                    +-> failed -> voided
 ```
 
-运行接口要求 `Idempotency-Key`。同一调用者复用相同键时返回已有评估，不重复插入结果；历史快照禁止覆盖。
+运行接口要求 `Idempotency-Key`。同一调用者复用相同键时返回已有评估，不重复插入结果；历史快照禁止覆盖。评估完成时为每组同键去重生成 `pending` 状态的独立性冲突复核记录；存在未处理冲突组时确认接口返回 HTTP `409`（`INDEPENDENCE_CONFLICT_PENDING`），复核员逐组处理为 `accepted`、`split` 或 `evidenced` 后才能确认。冲突记录独立成表，评估作废或重算不会删除，重算后的评估可看到同场景历史处理结果。
 
 ## 共享枚举位置
 
@@ -94,6 +95,14 @@ queued -> running -> completed -> confirmed
 
 前后端枚举值完全一致；展示文案只存在于前端标签映射，API 和数据库始终传递英文枚举值。
 
+`ConflictResolutionState = pending | accepted | split | evidenced`（复核动作 `accept | split | evidence`）
+
+- 后端定义：`backend/internal/constants/independence_resolution.go`
+- 数据校验：`backend/internal/model/independence_conflict.go`、`backend/internal/dto/independence_conflict.go`
+- 业务与测试：`backend/internal/service/independence_conflict_service.go` 及对应 `_test.go`
+- 前端定义：`frontend/src/types/enums/conflict-resolution.ts`
+- 前端消费：`types/independence-conflict.ts`、`api/independence-conflict.ts`、`stores/independence-conflict.ts`、`components/common/IndependenceConflictPanel.vue`、`pages/CoveragePage.vue`
+
 ## 页面与共享前端模块
 
 | 页面 | 实体消费 | 主要动作 |
@@ -101,7 +110,7 @@ queued -> running -> completed -> confirmed
 | `/nodes` | `ProcessNode + DeviationScenario` | 建档、修改设计边界、停用、风险摘要 |
 | `/deviations` | `DeviationScenario + ProcessNode + Safeguard` | 编辑原因后果、风险分级、合法状态迁移 |
 | `/safeguards` | `Safeguard + DeviationScenario` | 登记、更新、失效/恢复、检查独立性与有效期 |
-| `/coverage` | `CoverageEvaluation + DeviationScenario + Safeguard` | 幂等运行、轮询、路径解释、版本对比、确认/作废 |
+| `/coverage` | `CoverageEvaluation + DeviationScenario + Safeguard + IndependenceConflict` | 幂等运行、轮询、路径解释、版本对比、冲突复核、确认/作废 |
 | `/audit` | 四个实体的审计投影 | 筛选 request ID、查看前后快照与算法元数据 |
 
 `RiskBadge` 由节点、偏差和覆盖页共用；`ScenarioStateTimeline` 由偏差和覆盖页共用；`EvidenceDrawer` 由保护层、覆盖和审计页共用。`useAuth` 统一会话与权限，`useCoverageRun` 统一幂等键、轮询和离开页面后的过期请求取消。
@@ -127,8 +136,10 @@ queued -> running -> completed -> confirmed
 | `GET/POST` | `/api/v1/coverage-evaluations` | 评估列表与幂等运行 |
 | `GET` | `/api/v1/coverage-evaluations/:id` | 读取不可变评估 |
 | `POST` | `/api/v1/coverage-evaluations/:id/replay` | 从快照确定性重放并比较 |
-| `POST` | `/api/v1/coverage-evaluations/:id/confirm` | 人工确认 |
+| `POST` | `/api/v1/coverage-evaluations/:id/confirm` | 人工确认（存在未处理冲突时返回 `409`） |
 | `POST` | `/api/v1/coverage-evaluations/:id/void` | 作废评估 |
+| `GET` | `/api/v1/coverage-evaluations/:id/independence-conflicts` | 列出独立性冲突组、保留/忽略依据与历史处理结果 |
+| `POST` | `/api/v1/coverage-evaluations/:id/independence-conflicts/:conflictId/resolve` | 逐组复核：接受去重、拆分保护层或补充证据并填写理由 |
 | `GET` | `/api/v1/audit-logs` | 只读审计查询 |
 | `GET` | `/healthz` | 无认证真实健康检查 |
 
@@ -260,6 +271,7 @@ docker compose config --quiet
 - 返回 `403`：当前角色没有写权限；审计员只读，偏差复核还要求复核人与作者不同。
 - 状态迁移返回 `409`：刷新场景并按状态图选择下一状态；服务端用条件更新保证失败时数据库不变。
 - 评估运行返回 `400`：确认请求含非空 `Idempotency-Key`，且目标场景和保护层数据完整。
+- 评估确认返回 `409` 且错误码为 `INDEPENDENCE_CONFLICT_PENDING`：先在覆盖推演页的独立性冲突复核区逐组处理冲突，再确认评估。
 - 覆盖分低于预期：检查过期保护层、失效生命周期和重复 `independence_key`，再打开评分解释查看去重原因。
 - Compose 服务未 healthy：执行 `docker compose logs db backend frontend`，优先检查 DSN、JWT 密钥和数据库卷权限。
 - 页面刷新出现 404：确认通过 Nginx 或 Vite 访问；Nginx 已配置 SPA fallback，不能直接打开构建后的单个 HTML 文件。

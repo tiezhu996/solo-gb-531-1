@@ -7,10 +7,12 @@ import PageHeader from '../components/common/PageHeader.vue'
 import RiskBadge from '../components/common/RiskBadge.vue'
 import ScenarioStateTimeline from '../components/common/ScenarioStateTimeline.vue'
 import EvidenceDrawer from '../components/common/EvidenceDrawer.vue'
+import IndependenceConflictPanel from '../components/common/IndependenceConflictPanel.vue'
 import { useCoverageRun } from '../hooks/useCoverageRun'
 import { useAuth } from '../hooks/useAuth'
 import { useCoverageEvaluationStore } from '../stores/coverage-evaluation'
 import { useDeviationScenarioStore } from '../stores/deviation-scenario'
+import { useIndependenceConflictStore } from '../stores/independence-conflict'
 import { useSafeguardStore } from '../stores/safeguard'
 import { errorMessage } from '../api/client'
 import { coverageStateLabels } from '../types/enums/coverage-state'
@@ -19,12 +21,14 @@ import type { CoverageSnapshot, EvaluationExplanation, PathEvidence, ScoringStep
 const evaluations = useCoverageEvaluationStore()
 const scenarios = useDeviationScenarioStore()
 const safeguards = useSafeguardStore()
+const conflicts = useIndependenceConflictStore()
 const { canEdit, canReview } = useAuth()
 const runner = useCoverageRun()
 const scenarioId = ref<number>()
 const drawer = ref(false)
 const compareId = ref<number>()
 const selected = computed(() => evaluations.selected)
+const pendingConflicts = computed(() => conflicts.pendingCount)
 const scenario = computed(() => scenarios.items.find((x) => x.id === selected.value?.scenario_id || x.id === scenarioId.value))
 const scenarioSafeguards = computed(() => safeguards.items.filter((x) => x.target_scenario_id === scenario.value?.id))
 const comparable = computed(() => evaluations.items.filter((x) => x.id !== selected.value?.id && x.scenario_id === selected.value?.scenario_id))
@@ -71,6 +75,7 @@ onMounted(refresh)
         <div v-if="runner.polling.value" class="polling"><LoaderCircle :size="16" />正在读取计算状态</div>
       </section>
       <ScenarioStateTimeline v-if="scenario" :state="scenario.scenario_state" />
+      <IndependenceConflictPanel :evaluation-id="selected.id" :evaluation-state="selected.evaluation_state" :can-review="canReview" />
       <div class="coverage-grid">
         <section class="path-workbench">
           <div class="section-heading"><div><p class="eyebrow">CAUSE → CONSEQUENCE PATHS</p><h2>路径与保护缺口</h2></div><span>{{ paths.length }} 条路径 · {{ uncoveredCount }} 条未覆盖</span></div>
@@ -89,7 +94,7 @@ onMounted(refresh)
           <div v-if="selected.deduplicated_safeguards?.length" class="dedupe-note"><strong>去重措施</strong><span v-for="item in selected.deduplicated_safeguards" :key="`${item.independence_key}-${item.kept_id}`">{{ item.independence_key }}：保留 #{{ item.kept_id }}，忽略 {{ item.ignored_ids.join(', ') }}</span></div>
           <div class="compare-tools"><GitCompare :size="16" /><el-select v-model="compareId" placeholder="选择版本对比" clearable><el-option v-for="item in comparable" :key="item.id" :label="`#${item.id} · ${item.coverage_score} 分`" :value="item.id" /></el-select></div>
           <div v-if="comparison" class="comparison-band"><div><span>覆盖分</span><strong>{{ comparison.coverage_score }} → {{ selected.coverage_score }}</strong></div><div><span>风险级别</span><strong>{{ comparison.risk_rank_after }} → {{ selected.risk_rank_after }}</strong></div></div>
-          <div v-if="canReview && selected.evaluation_state === 'completed'" class="review-strip"><strong>人工结论</strong><p>确认仅表示已完成离线证据复核，不代表可执行控制。</p><div><el-button type="success" @click="changeState('confirm')"><CheckCircle2 :size="15" />确认评估</el-button><el-button type="danger" plain @click="changeState('void')"><XCircle :size="15" />作废</el-button></div></div>
+          <div v-if="canReview && selected.evaluation_state === 'completed'" class="review-strip"><strong>人工结论</strong><p>确认仅表示已完成离线证据复核，不代表可执行控制。</p><p v-if="pendingConflicts > 0" class="conflict-warning">还有 {{ pendingConflicts }} 组独立性冲突未复核，全部处理前不能确认评估。</p><div><el-button type="success" :disabled="pendingConflicts > 0" @click="changeState('confirm')"><CheckCircle2 :size="15" />确认评估</el-button><el-button type="danger" plain @click="changeState('void')"><XCircle :size="15" />作废</el-button></div></div>
         </aside>
       </div>
       <EvidenceDrawer v-model="drawer" title="不可变评估输入快照" :note="`评估 #${selected.id} · ${selected.algorithm_version}`" :evidence="selected.input_snapshot" />

@@ -176,3 +176,52 @@ docker compose down -v --remove-orphans
 - 按容器名前缀和 Compose 项目标签检索，容器、网络、卷均为空。
 - `18531`、`19531`、`57531`、`20531` 四个端口全部无监听。
 - Compose 构建镜像保留，便于后续重新执行 `docker compose up -d --build`；未保留运行容器或数据库数据。
+
+---
+
+# 独立性冲突复核（2026-09-11 增补验证）
+
+## 范围
+
+在既有覆盖推演之上新增独立性冲突复核：同键去重自动生成冲突组（保留/忽略依据落库），复核员逐组接受去重、拆分保护层或补充证据并填写理由；存在未处理冲突组时确认接口返回 `409 INDEPENDENCE_CONFLICT_PENDING`；冲突记录独立成表，作废或重算后处理结果保留并作为历史结论展示。旧入口、历史快照和原去重结果未改动。
+
+## 构建与测试
+
+| 范围 | 命令 | 实际结果 | 结论 |
+| --- | --- | --- | --- |
+| Go workspace | `go work sync` | 退出码 0 | 通过 |
+| 根目录构建/静态检查 | `go build ./backend/... && go vet ./backend/...` | 退出码 0 | 通过 |
+| 根目录测试 | `go test ./backend/...` | algorithm、constants、service 通过 | 通过 |
+| 根目录竞态 | `go test -race ./backend/...` | 全部包通过 | 通过 |
+| backend 构建/测试 | `cd backend && go build ./... && go vet ./... && go test ./...` | 退出码 0，新增 `independence_conflict_service_test.go` 3 个用例与 `independence_resolution_test.go` 2 个用例通过 | 通过 |
+| 前端单测 | `npm --prefix frontend run test` | 4 个测试文件、12 条测试全部通过（新增 store 与面板组件测试） | 通过 |
+| 前端类型检查 | `npm --prefix frontend run typecheck` | `vue-tsc --noEmit` 退出码 0 | 通过 |
+| 前端生产构建 | `npm --prefix frontend run build` | Vite 构建成功 | 通过 |
+| Compose 配置 | `docker compose config --quiet` | 本环境无 docker，未执行；Compose 文件未改动 | 未执行 |
+
+清理：删除了 112 个未跟踪的 macOS AppleDouble 垃圾文件（`._*`，其中 `._*.test.ts` 会被 Vitest 误收集导致解析失败），不触及任何受跟踪源码。
+
+## Runtime Smoke 与 API 真实链路
+
+按 `runtime_smoke.json` 以 SQLite 内存库在 `20531` 启动，`/healthz` 返回 200。使用种子场景 #1（保护层 #1/#2 共享独立性键 `SIS-R101-TEMP`）完成 16 组真实 HTTP 断言：
+
+| # | 验证点 | 结果 |
+| ---: | --- | --- |
+| 1 | 运行评估 #1（幂等键 `e2e-conflict-run-0001`） | 201，`completed`，自动生成 1 组 `pending` 冲突 |
+| 2 | `GET .../independence-conflicts` | 200，含保留 #1、忽略 #2 与去重依据，`pending_count=1`，`prior_resolutions=[]` |
+| 3 | 冲突未处理时 `POST .../confirm` | 409 `INDEPENDENCE_CONFLICT_PENDING` |
+| 4 | 工程师 `POST .../resolve` | 403（无 `evaluation:confirm` 权限） |
+| 5 | 复核员 `accept` 并填写理由 | 200，`resolution_state=accepted`，记录复核人与时间 |
+| 6 | 再次 `POST .../confirm` | 200，`confirmed` |
+| 7 | `POST .../void` | 200，`voided`；冲突记录与处理理由完整保留 |
+| 8 | 作废后再次 `resolve` | 409（非 `completed` 状态不可复核） |
+| 9 | 新幂等键重算 | 201，评估 #2 生成全新 `pending` 冲突组 |
+| 10 | 评估 #2 冲突列表 | `prior_resolutions` 含评估 #1 的 `accepted` 结论与理由（作废+重算后仍保留） |
+| 11 | 相同幂等键重复运行 | 200 返回评估 #2，无重复插入 |
+| 12 | `POST .../2/replay` | `determinism_replay_passed=true`，覆盖分 80 不变 |
+| 13 | 原去重结果 | `deduplicated_safeguards` 与改动前一致（保留 #1 忽略 #2） |
+| 14 | `GET .../2/compare/1` | 200，版本对比正常 |
+| 15 | 审计员查冲突 200 / 复核 403 | 只读边界成立 |
+| 16 | `split` 动作与审计 | 状态 `split`；`audit-logs?entity_type=independence_conflict` 含 `resolve_accept`、`resolve_split` 及理由 |
+
+验证后已停止 `20531` 进程，端口无监听。

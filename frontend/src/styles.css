@@ -111,6 +111,9 @@ code, pre { font-family: "SFMono-Regular", Consolas, monospace; }
 .state-label.verified, .state-label.running { color: #1e6259; background: var(--teal-soft); border-color: #82b4a8; }
 .state-label.draft { color: #565f5c; background: #edf0ef; }
 .state-label.rework, .state-label.expired, .state-label.failed { color: #842a27; background: var(--red-soft); border-color: #d3a09d; }
+.state-label.pending { color: #81500b; background: var(--amber-soft); border-color: #d4ad63; }
+.state-label.split { color: #28586b; background: var(--blue-soft); border-color: #95b4c0; }
+.state-label.evidenced { color: #1e6259; background: var(--teal-soft); border-color: #82b4a8; }
 
 .split-workspace { display: grid; grid-template-columns: minmax(0, 1.45fr) minmax(350px, .75fr); gap: 32px; margin-top: 20px; }
 .editor-panel { min-width: 0; padding-left: 25px; border-left: 1px solid var(--line); }
@@ -210,8 +213,29 @@ code, pre { font-family: "SFMono-Regular", Consolas, monospace; }
 .review-strip { margin-top: 24px; padding-top: 16px; border-top: 2px solid var(--ink); }
 .review-strip p { margin: 7px 0 11px; color: var(--muted); font-size: .69rem; line-height: 1.45; }
 .review-strip > div { display: flex; flex-wrap: wrap; gap: 7px; }
+.conflict-warning { padding: 9px 11px; color: #67430e !important; background: var(--amber-soft); border-left: 3px solid var(--amber); font-weight: 700; }
 
-.audit-metrics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); border-top: 1px solid var(--line-strong); border-bottom: 1px solid var(--line-strong); }
+.conflict-panel { margin-top: 22px; padding: 2px 0 4px; border-top: 1px solid var(--line-strong); }
+.conflict-panel .section-heading h2 { display: flex; align-items: center; gap: 7px; }
+.conflict-panel .section-heading svg { color: var(--blue); }
+.conflict-group { display: grid; gap: 9px; padding: 13px 0 15px; border-bottom: 1px solid var(--line); }
+.conflict-group > header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.conflict-group > header strong { font-size: .82rem; letter-spacing: .01em; }
+.conflict-group .dedup-basis { margin: 0; color: var(--muted); font-size: .72rem; line-height: 1.5; }
+.resolution-summary { display: grid; gap: 5px; padding: 10px 12px; background: #edf1ef; border-left: 3px solid var(--green); }
+.resolution-summary > div { display: flex; align-items: baseline; gap: 9px; }
+.resolution-summary strong { color: var(--green); font-size: .72rem; }
+.resolution-summary span { color: var(--muted); font-size: .66rem; }
+.resolution-summary p { margin: 0; font-size: .71rem; line-height: 1.5; }
+.resolution-form { display: grid; grid-template-columns: minmax(150px, 190px) minmax(0, 1fr) auto; align-items: start; gap: 9px; }
+.conflict-waiting { margin: 0; color: var(--muted); font-size: .68rem; }
+.prior-resolutions { margin-top: 16px; padding: 12px 14px; background: #f0f3f1; border: 1px dashed var(--line-strong); }
+.prior-resolutions h3 { margin: 0 0 4px; font-size: .74rem; text-transform: uppercase; }
+.prior-resolutions > p { margin: 0 0 8px; color: var(--muted); font-size: .66rem; }
+.prior-resolutions ul { margin: 0; padding-left: 17px; }
+.prior-resolutions li { padding: 2px 0; font-size: .7rem; line-height: 1.5; }
+
+.audit-metrics { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); border-top: 1px solid var(--line-strong); border-bottom: 1px solid var(--line-strong); }
 .audit-metrics > div { min-height: 70px; display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 13px 17px; border-right: 1px solid var(--line); }
 .audit-metrics > div:last-child { border-right: 0; }
 .audit-metrics span { color: var(--muted); font-size: .7rem; }
@@ -261,6 +285,7 @@ code, pre { font-family: "SFMono-Regular", Consolas, monospace; }
   .page-wrap { padding: 23px 17px 46px; }
   .page-header { align-items: flex-start; }
   .split-workspace, .coverage-grid { grid-template-columns: 1fr; }
+  .resolution-form { grid-template-columns: 1fr; }
   .editor-panel, .coverage-evidence { padding: 22px 0 0; border-top: 2px solid var(--ink); border-left: 0; }
   .run-launcher { grid-template-columns: 1fr; }
   .coverage-summary { grid-template-columns: 1fr 1fr; }
